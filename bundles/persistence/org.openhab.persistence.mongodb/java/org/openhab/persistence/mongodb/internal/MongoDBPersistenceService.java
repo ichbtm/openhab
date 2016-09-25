@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2010-2014, openHAB.org and others.
+ * Copyright (c) 2010-2016 by the respective copyright holders.
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
@@ -13,8 +13,8 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
-import java.util.Dictionary;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.commons.lang.StringUtils;
 import org.bson.types.ObjectId;
@@ -43,8 +43,7 @@ import org.openhab.core.persistence.PersistenceService;
 import org.openhab.core.persistence.QueryablePersistenceService;
 import org.openhab.core.types.State;
 import org.openhab.core.types.UnDefType;
-import org.osgi.service.cm.ConfigurationException;
-import org.osgi.service.cm.ManagedService;
+import org.osgi.framework.BundleContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,328 +56,315 @@ import com.mongodb.MongoClientURI;
 
 /**
  * This is the implementation of the MongoDB {@link PersistenceService}.
- * 
+ *
  * @author Thorsten Hoeger
  * @since 1.5.0
  */
-public class MongoDBPersistenceService implements QueryablePersistenceService,
-		ManagedService {
+public class MongoDBPersistenceService implements QueryablePersistenceService {
 
-	private static final String FIELD_ID = "_id";
-	private static final String FIELD_ITEM = "item";
-	private static final String FIELD_REALNAME = "realName";
-	private static final String FIELD_TIMESTAMP = "timestamp";
-	private static final String FIELD_VALUE = "value";
+    private static final String FIELD_ID = "_id";
+    private static final String FIELD_ITEM = "item";
+    private static final String FIELD_REALNAME = "realName";
+    private static final String FIELD_TIMESTAMP = "timestamp";
+    private static final String FIELD_VALUE = "value";
 
-	private static final Logger logger = LoggerFactory
-			.getLogger(MongoDBPersistenceService.class);
+    private static final Logger logger = LoggerFactory.getLogger(MongoDBPersistenceService.class);
 
-	private String url;
-	private String db;
-	private String collection;
+    private String url;
+    private String db;
+    private String collection;
 
-	private boolean initialized = false;
-	protected ItemRegistry itemRegistry;
+    private boolean initialized = false;
+    protected ItemRegistry itemRegistry;
 
-	private MongoClient cl;
-	private DBCollection mongoCollection;
+    private MongoClient cl;
+    private DBCollection mongoCollection;
 
-	public void activate() {
-		//
-	}
+    public void activate(final BundleContext bundleContext, final Map<String, Object> config) {
+        url = (String) config.get("url");
+        logger.debug("MongoDB URL {}", url);
+        if (StringUtils.isBlank(url)) {
+            logger.warn(
+                    "The MongoDB database URL is missing - please configure the mongodb:url parameter in openhab.cfg");
+        }
+        db = (String) config.get("database");
+        logger.debug("MongoDB database {}", db);
+        if (StringUtils.isBlank(db)) {
+            logger.warn(
+                    "The MongoDB database name is missing - please configure the mongodb:database parameter in openhab.cfg");
+        }
+        collection = (String) config.get("collection");
+        logger.debug("MongoDB collection {}", collection);
+        if (StringUtils.isBlank(collection)) {
+            logger.warn(
+                    "The MongoDB database collection is missing - please configure the mongodb:collection parameter in openhab.cfg");
+        }
 
-	public void deactivate() {
-		logger.debug("MongoDB persistence bundle stopping. Disconnecting from database.");
-		disconnectFromDatabase();
-	}
+        disconnectFromDatabase();
+        connectToDatabase();
 
-	public void setItemRegistry(ItemRegistry itemRegistry) {
-		this.itemRegistry = itemRegistry;
-	}
+        // connection has been established ... initialization completed!
+        initialized = true;
+    }
 
-	public void unsetItemRegistry(ItemRegistry itemRegistry) {
-		this.itemRegistry = null;
-	}
+    public void deactivate(final int reason) {
+        logger.debug("MongoDB persistence bundle stopping. Disconnecting from database.");
+        disconnectFromDatabase();
+    }
 
-	/**
-	 * @{inheritDoc
-	 */
-	public String getName() {
-		return "mongodb";
-	}
+    public void setItemRegistry(ItemRegistry itemRegistry) {
+        this.itemRegistry = itemRegistry;
+    }
 
-	/**
-	 * @{inheritDoc
-	 */
-	public void store(Item item, String alias) {
-		// Don't log undefined/uninitialised data
-		if (item.getState() instanceof UnDefType) {
-			return;
-		}
+    public void unsetItemRegistry(ItemRegistry itemRegistry) {
+        this.itemRegistry = null;
+    }
 
-		// If we've not initialised the bundle, then return
-		if (initialized == false) {
-			logger.warn("MongoDB not initialized");
-			return;
-		}
+    /**
+     * @{inheritDoc
+     */
+    @Override
+    public String getName() {
+        return "mongodb";
+    }
 
-		// Connect to mongodb server if we're not already connected
-		if (!isConnected()) {
-			connectToDatabase();
-		}
+    /**
+     * @{inheritDoc
+     */
+    @Override
+    public void store(Item item, String alias) {
+        // Don't log undefined/uninitialised data
+        if (item.getState() instanceof UnDefType) {
+            return;
+        }
 
-		// If we still didn't manage to connect, then return!
-		if (!isConnected()) {
-			logger.warn(
-					"mongodb: No connection to database. Can not persist item '{}'! Will retry connecting to database next time.",
-					item);
-			return;
-		}
+        // If we've not initialised the bundle, then return
+        if (initialized == false) {
+            logger.warn("MongoDB not initialized");
+            return;
+        }
 
-		String realName = item.getName();
-		String name = (alias != null) ? alias : realName;
-		Object value = this.convertValue(item.getState());
+        // Connect to mongodb server if we're not already connected
+        if (!isConnected()) {
+            connectToDatabase();
+        }
 
-		DBObject obj = new BasicDBObject();
-		obj.put(FIELD_ID, new ObjectId());
-		obj.put(FIELD_ITEM, name);
-		obj.put(FIELD_REALNAME, realName);
-		obj.put(FIELD_TIMESTAMP, new Date());
-		obj.put(FIELD_VALUE, value);
-		this.mongoCollection.save(obj);
+        // If we still didn't manage to connect, then return!
+        if (!isConnected()) {
+            logger.warn(
+                    "mongodb: No connection to database. Can not persist item '{}'! Will retry connecting to database next time.",
+                    item);
+            return;
+        }
 
-		logger.debug("MongoDB save {}={}", name, value);
-	}
+        String realName = item.getName();
+        String name = (alias != null) ? alias : realName;
+        Object value = this.convertValue(item.getState());
 
-	private Object convertValue(State state) {
-		Object value;
-		if (state instanceof PercentType) {
-			value = ((PercentType) state).toBigDecimal().doubleValue();
-		} else if (state instanceof DateTimeType) {
-			value = ((DateTimeType) state).getCalendar().getTime();
-		} else if (state instanceof DecimalType) {
-			value = ((DecimalType) state).toBigDecimal().doubleValue();
-		} else {
-			value = state.toString();
-		}
-		return value;
-	}
+        DBObject obj = new BasicDBObject();
+        obj.put(FIELD_ID, new ObjectId());
+        obj.put(FIELD_ITEM, name);
+        obj.put(FIELD_REALNAME, realName);
+        obj.put(FIELD_TIMESTAMP, new Date());
+        obj.put(FIELD_VALUE, value);
+        this.mongoCollection.save(obj);
 
-	/**
-	 * @{inheritDoc
-	 */
-	public void store(Item item) {
-		store(item, null);
-	}
+        logger.debug("MongoDB save {}={}", name, value);
+    }
 
-	/**
-	 * Checks if we have a database connection
-	 * 
-	 * @return true if connection has been established, false otherwise
-	 */
-	private boolean isConnected() {
-		return cl != null;
-	}
+    private Object convertValue(State state) {
+        Object value;
+        if (state instanceof PercentType) {
+            value = ((PercentType) state).toBigDecimal().doubleValue();
+        } else if (state instanceof DateTimeType) {
+            value = ((DateTimeType) state).getCalendar().getTime();
+        } else if (state instanceof DecimalType) {
+            value = ((DecimalType) state).toBigDecimal().doubleValue();
+        } else {
+            value = state.toString();
+        }
+        return value;
+    }
 
-	/**
-	 * Connects to the database
-	 */
-	private void connectToDatabase() {
-		try {
-			logger.debug("Connect MongoDB");
-			this.cl = new MongoClient(new MongoClientURI(this.url));
-			mongoCollection = cl.getDB(this.db).getCollection(this.collection);
+    /**
+     * @{inheritDoc
+     */
+    @Override
+    public void store(Item item) {
+        store(item, null);
+    }
 
-			BasicDBObject idx = new BasicDBObject();
-			idx.append(FIELD_TIMESTAMP, 1).append(FIELD_ITEM, 1);
-			this.mongoCollection.createIndex(idx);
-			logger.debug("Connect MongoDB ... done");
-		} catch (Exception e) {
-			logger.error("Failed to connect to database {}", this.url);
-			throw new RuntimeException("Cannot connect to database", e);
-		}
-	}
+    /**
+     * Checks if we have a database connection
+     * 
+     * @return true if connection has been established, false otherwise
+     */
+    private boolean isConnected() {
+        return cl != null;
+    }
 
-	/**
-	 * Disconnects from the database
-	 */
-	private void disconnectFromDatabase() {
-		this.mongoCollection = null;
-		if (this.cl != null) {
-			this.cl.close();
-		}
-		cl = null;
-	}
+    /**
+     * Connects to the database
+     */
+    private void connectToDatabase() {
+        try {
+            logger.debug("Connect MongoDB");
+            this.cl = new MongoClient(new MongoClientURI(this.url));
+            mongoCollection = cl.getDB(this.db).getCollection(this.collection);
 
-	/**
-	 * @{inheritDoc}
-	 */
-	public void updated(Dictionary<String, ?> config)
-			throws ConfigurationException {
+            BasicDBObject idx = new BasicDBObject();
+            idx.append(FIELD_TIMESTAMP, 1).append(FIELD_ITEM, 1);
+            this.mongoCollection.createIndex(idx);
+            logger.debug("Connect MongoDB ... done");
+        } catch (Exception e) {
+            logger.error("Failed to connect to database {}", this.url);
+            throw new RuntimeException("Cannot connect to database", e);
+        }
+    }
 
-		if (config != null) {
-			url = (String) config.get("url");
-			logger.debug("MongoDB URL {}", url);
-			if (StringUtils.isBlank(url)) {
-				throw new ConfigurationException(
-						"mongodb:url",
-						"The MongoDB database URL is missing - please configure the mongodb:url parameter in openhab.cfg");
-			}
-			db = (String) config.get("database");
-			logger.debug("MongoDB database {}", db);
-			if (StringUtils.isBlank(db)) {
-				throw new ConfigurationException(
-						"mongodb:database",
-						"The MongoDB database name is missing - please configure the mongodb:database parameter in openhab.cfg");
-			}
-			collection = (String) config.get("collection");
-			logger.debug("MongoDB collection {}", collection);
-			if (StringUtils.isBlank(collection)) {
-				throw new ConfigurationException(
-						"mongodb:collection",
-						"The MongoDB database collection is missing - please configure the mongodb:collection parameter in openhab.cfg");
-			}
+    /**
+     * Disconnects from the database
+     */
+    private void disconnectFromDatabase() {
+        this.mongoCollection = null;
+        if (this.cl != null) {
+            this.cl.close();
+        }
+        cl = null;
+    }
 
-			disconnectFromDatabase();
-			connectToDatabase();
+    @Override
+    public Iterable<HistoricItem> query(FilterCriteria filter) {
+        if (!initialized) {
+            return Collections.emptyList();
+        }
 
-			// connection has been established ... initialization completed!
-			initialized = true;
-		}
+        if (!isConnected()) {
+            connectToDatabase();
+        }
 
-	}
+        if (!isConnected()) {
+            return Collections.emptyList();
+        }
 
-	@Override
-	public Iterable<HistoricItem> query(FilterCriteria filter) {
-		if (!initialized)
-			return Collections.emptyList();
+        String name = filter.getItemName();
+        Item item = getItem(name);
 
-		if (!isConnected())
-			connectToDatabase();
+        List<HistoricItem> items = new ArrayList<HistoricItem>();
+        DBObject query = new BasicDBObject();
+        if (filter.getItemName() != null) {
+            query.put(FIELD_ITEM, filter.getItemName());
+        }
+        if (filter.getState() != null && filter.getOperator() != null) {
+            String op = convertOperator(filter.getOperator());
+            Object value = convertValue(filter.getState());
+            query.put(FIELD_VALUE, new BasicDBObject(op, value));
+        }
+        if (filter.getBeginDate() != null) {
+            query.put(FIELD_TIMESTAMP, new BasicDBObject("$gte", filter.getBeginDate()));
+        }
+        if (filter.getEndDate() != null) {
+            query.put(FIELD_TIMESTAMP, new BasicDBObject("$lte", filter.getEndDate()));
+        }
 
-		if (!isConnected())
-			return Collections.emptyList();
+        Integer sortDir = (filter.getOrdering() == Ordering.ASCENDING) ? 1 : -1;
+        DBCursor cursor = this.mongoCollection.find(query).sort(new BasicDBObject(FIELD_TIMESTAMP, sortDir))
+                .skip(filter.getPageNumber() * filter.getPageSize()).limit(filter.getPageSize());
 
-		String name = filter.getItemName();
-		Item item = getItem(name);
+        while (cursor.hasNext()) {
+            BasicDBObject obj = (BasicDBObject) cursor.next();
 
-		List<HistoricItem> items = new ArrayList<HistoricItem>();
-		DBObject query = new BasicDBObject();
-		if (filter.getItemName() != null) {
-			query.put(FIELD_ITEM, filter.getItemName());
-		}
-		if (filter.getState() != null && filter.getOperator() != null) {
-			String op = convertOperator(filter.getOperator());
-			Object value = convertValue(filter.getState());
-			query.put(FIELD_VALUE, new BasicDBObject(op, value));
-		}
-		if (filter.getBeginDate() != null) {
-			query.put(FIELD_TIMESTAMP,
-					new BasicDBObject("$gte", filter.getBeginDate()));
-		}
-		if (filter.getEndDate() != null) {
-			query.put(FIELD_TIMESTAMP,
-					new BasicDBObject("$lte", filter.getEndDate()));
-		}
+            final State state;
+            if (item instanceof NumberItem) {
+                state = new DecimalType(obj.getDouble(FIELD_VALUE));
+            } else if (item instanceof DimmerItem) {
+                state = new PercentType(obj.getInt(FIELD_VALUE));
+            } else if (item instanceof SwitchItem) {
+                state = OnOffType.valueOf(obj.getString(FIELD_VALUE));
+            } else if (item instanceof ContactItem) {
+                state = OpenClosedType.valueOf(obj.getString(FIELD_VALUE));
+            } else if (item instanceof RollershutterItem) {
+                state = new PercentType(obj.getInt(FIELD_VALUE));
+            } else if (item instanceof ColorItem) {
+                state = new HSBType(obj.getString(FIELD_VALUE));
+            } else if (item instanceof DateTimeItem) {
+                Calendar cal = Calendar.getInstance();
+                cal.setTime(obj.getDate(FIELD_VALUE));
+                state = new DateTimeType(cal);
+            } else {
+                state = new StringType(obj.getString(FIELD_VALUE));
+            }
 
-		Integer sortDir = (filter.getOrdering() == Ordering.ASCENDING) ? 1 : -1;
-		DBCursor cursor = this.mongoCollection.find(query)
-				.sort(new BasicDBObject(FIELD_TIMESTAMP, sortDir))
-				.skip(filter.getPageNumber() * filter.getPageSize())
-				.limit(filter.getPageSize());
+            items.add(new MongoDBItem(name, state, obj.getDate(FIELD_TIMESTAMP)));
+        }
 
-		while (cursor.hasNext()) {
-			BasicDBObject obj = (BasicDBObject) cursor.next();
+        return items;
+    }
 
-			final State state;
-			if (item instanceof NumberItem) {
-				state = new DecimalType(obj.getDouble(FIELD_VALUE));
-			} else if (item instanceof DimmerItem) {
-				state = new PercentType(obj.getInt(FIELD_VALUE));
-			} else if (item instanceof SwitchItem) {
-				state = OnOffType.valueOf(obj.getString(FIELD_VALUE));
-			} else if (item instanceof ContactItem) {
-				state = OpenClosedType.valueOf(obj.getString(FIELD_VALUE));
-			} else if (item instanceof RollershutterItem) {
-				state = new PercentType(obj.getInt(FIELD_VALUE));
-			} else if (item instanceof ColorItem) {
-				state = new HSBType(obj.getString(FIELD_VALUE));
-			} else if (item instanceof DateTimeItem) {
-				Calendar cal = Calendar.getInstance();
-				cal.setTime(obj.getDate(FIELD_VALUE));
-				state = new DateTimeType(cal);
-			} else {
-				state = new StringType(obj.getString(FIELD_VALUE));
-			}
+    private String convertOperator(Operator operator) {
+        switch (operator) {
+            case EQ:
+                return "$eq";
+            case GT:
+                return "$gt";
+            case GTE:
+                return "$gte";
+            case LT:
+                return "$lt";
+            case LTE:
+                return "$lte";
+            case NEQ:
+                return "$neq";
+            default:
+                return null;
+        }
+    }
 
-			items.add(new MongoDBItem(name, state, obj.getDate(FIELD_TIMESTAMP)));
-		}
+    private Item getItem(String itemName) {
+        Item item = null;
+        try {
+            if (itemRegistry != null) {
+                item = itemRegistry.getItem(itemName);
+            }
+        } catch (ItemNotFoundException e1) {
+            logger.error("Unable to get item type for {}", itemName);
+            // Set type to null - data will be returned as StringType
+            item = null;
+        }
+        return item;
+    }
 
-		return items;
-	}
+    public static class MongoDBItem implements HistoricItem {
 
-	private String convertOperator(Operator operator) {
-		switch (operator) {
-		case EQ:
-			return "$eq";
-		case GT:
-			return "$gt";
-		case GTE:
-			return "$gte";
-		case LT:
-			return "$lt";
-		case LTE:
-			return "$lte";
-		case NEQ:
-			return "$neq";
-		default:
-			return null;
-		}
-	}
+        final private String name;
+        final private State state;
+        final private Date timestamp;
 
-	private Item getItem(String itemName) {
-		Item item = null;
-		try {
-			if (itemRegistry != null) {
-				item = itemRegistry.getItem(itemName);
-			}
-		} catch (ItemNotFoundException e1) {
-			logger.error("Unable to get item type for {}", itemName);
-			// Set type to null - data will be returned as StringType
-			item = null;
-		}
-		return item;
-	}
+        public MongoDBItem(String name, State state, Date timestamp) {
+            this.name = name;
+            this.state = state;
+            this.timestamp = timestamp;
+        }
 
-	public static class MongoDBItem implements HistoricItem {
+        @Override
+        public String getName() {
+            return name;
+        }
 
-		final private String name;
-		final private State state;
-		final private Date timestamp;
+        @Override
+        public State getState() {
+            return state;
+        }
 
-		public MongoDBItem(String name, State state, Date timestamp) {
-			this.name = name;
-			this.state = state;
-			this.timestamp = timestamp;
-		}
+        @Override
+        public Date getTimestamp() {
+            return timestamp;
+        }
 
-		public String getName() {
-			return name;
-		}
+        @Override
+        public String toString() {
+            return DateFormat.getDateTimeInstance().format(timestamp) + ": " + name + " -> " + state.toString();
+        }
 
-		public State getState() {
-			return state;
-		}
-
-		public Date getTimestamp() {
-			return timestamp;
-		}
-
-		@Override
-		public String toString() {
-			return DateFormat.getDateTimeInstance().format(timestamp) + ": "
-					+ name + " -> " + state.toString();
-		}
-
-	}
+    }
 }

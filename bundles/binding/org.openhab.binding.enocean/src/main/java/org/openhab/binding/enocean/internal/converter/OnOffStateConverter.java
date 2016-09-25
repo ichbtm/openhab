@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2010-2014, openHAB.org and others.
+ * Copyright (c) 2010-2016 by the respective copyright holders.
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
@@ -8,15 +8,15 @@
  */
 package org.openhab.binding.enocean.internal.converter;
 
-import org.enocean.java.common.values.OnOffState;
+import org.opencean.core.common.values.OnOffState;
 import org.openhab.core.library.types.OnOffType;
 
 /**
  * A converter to convert a OnOffState to a OnOffType
- * 
+ *
  * @author Thomas Letsch (contact@thomas-letsch.de)
  * @since 1.4.0
- * 
+ *
  */
 public class OnOffStateConverter extends StateConverter<OnOffState, OnOffType> {
 

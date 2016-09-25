@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2010-2014, openHAB.org and others.
+ * Copyright (c) 2010-2016 by the respective copyright holders.
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
@@ -14,8 +14,6 @@ import java.util.HashMap;
 import java.util.Map.Entry;
 
 import javax.xml.bind.DatatypeConverter;
-
-import net.astesana.javaluator.DoubleEvaluator;
 
 import org.apache.commons.lang.StringUtils;
 import org.openhab.binding.openenergymonitor.OpenEnergyMonitorBindingProvider;
@@ -35,282 +33,292 @@ import org.osgi.service.cm.ManagedService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.astesana.javaluator.DoubleEvaluator;
+
 /**
- * 
+ *
  * Binding to receive data from Open Energy Monitor devices.
- * 
+ *
  * @author Pauli Anttila
  * @since 1.4.0
  */
-public class OpenEnergyMonitorBinding extends
-		AbstractBinding<OpenEnergyMonitorBindingProvider> implements
-		ManagedService {
+public class OpenEnergyMonitorBinding extends AbstractBinding<OpenEnergyMonitorBindingProvider>
+        implements ManagedService {
 
-	private static final Logger logger = LoggerFactory
-			.getLogger(OpenEnergyMonitorBinding.class);
+    private static final Logger logger = LoggerFactory.getLogger(OpenEnergyMonitorBinding.class);
 
-	/* configuration variables for communication */
-	private int udpPort = 9997;
-	private String serialPort = null;
-	private boolean simulate = false;
+    /* configuration variables for communication */
+    private int udpPort = 9997;
+    private String serialPort = null;
+    private boolean simulate = false;
 
-	private OpenEnergyMonitorDataParser dataParser = null;
+    private OpenEnergyMonitorDataParser dataParser = null;
 
-	/** Thread to handle messages from Open Energy Monitor devices */
-	private MessageListener messageListener = null;
+    /** Thread to handle messages from Open Energy Monitor devices */
+    private MessageListener messageListener = null;
 
-	public OpenEnergyMonitorBinding() {
-	}
+    public OpenEnergyMonitorBinding() {
+    }
 
-	public void activate() {
-		logger.debug("Activate");
-	}
+    @Override
+    public void activate() {
+        logger.debug("Activate");
+    }
 
-	public void deactivate() {
-		logger.debug("Deactivate");
-		messageListener.setInterrupted(true);
-	}
+    @Override
+    public void deactivate() {
+        logger.debug("Deactivate");
+        if (messageListener != null) {
+            messageListener.setInterrupted(true);
+        }
+    }
 
-	/**
-	 * @{inheritDoc
-	 */
-	@Override
-	public void updated(Dictionary<String, ?> config)
-			throws ConfigurationException {
+    protected void addBindingProvider(OpenEnergyMonitorBindingProvider bindingProvider) {
+        super.addBindingProvider(bindingProvider);
+    }
 
-		if (config != null) {
+    protected void removeBindingProvider(OpenEnergyMonitorBindingProvider bindingProvider) {
+        super.removeBindingProvider(bindingProvider);
+    }
 
-			HashMap<String, OpenEnergyMonitorParserRule> parsingRules = new HashMap<String, OpenEnergyMonitorParserRule>();
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void updated(Dictionary<String, ?> config) throws ConfigurationException {
 
-			Enumeration<String> keys = config.keys();
+        if (config != null) {
 
-			while (keys.hasMoreElements()) {
-				String key = (String) keys.nextElement();
+            HashMap<String, OpenEnergyMonitorParserRule> parsingRules = new HashMap<String, OpenEnergyMonitorParserRule>();
 
-				// the config-key enumeration contains additional keys that we
-				// don't want to process here ...
-				if ("service.pid".equals(key)) {
-					continue;
-				}
+            Enumeration<String> keys = config.keys();
 
-				String value = (String) config.get(key);
+            while (keys.hasMoreElements()) {
+                String key = keys.nextElement();
 
-				if ("udpPort".equals(key)) {
-					if (StringUtils.isNotBlank(value)) {
-						udpPort = Integer.parseInt(value);
-					}
-				} else if ("serialPort".equals(key)) {
-					serialPort = value;
-				} else if ("simulate".equals(key)) {
-					if (StringUtils.isNotBlank(value)) {
-						simulate = Boolean.parseBoolean(value);
-					}
-				} else {
+                // the config-key enumeration contains additional keys that we
+                // don't want to process here ...
+                if ("service.pid".equals(key)) {
+                    continue;
+                }
 
-					// process all data parsing rules
-					try {
-						OpenEnergyMonitorParserRule rule = new OpenEnergyMonitorParserRule(value);
-						parsingRules.put(key, rule);
-					} catch (OpenEnergyMonitorException e) {
-						throw new ConfigurationException(key, "invalid parser rule", e);
-					}
-				}
+                String value = (String) config.get(key);
 
-			}
+                if ("udpPort".equals(key)) {
+                    if (StringUtils.isNotBlank(value)) {
+                        udpPort = Integer.parseInt(value);
+                    }
+                } else if ("serialPort".equals(key)) {
+                    serialPort = value;
+                } else if ("simulate".equals(key)) {
+                    if (StringUtils.isNotBlank(value)) {
+                        simulate = Boolean.parseBoolean(value);
+                    }
+                } else {
 
-			if (parsingRules != null) {
+                    // process all data parsing rules
+                    try {
+                        OpenEnergyMonitorParserRule rule = new OpenEnergyMonitorParserRule(value);
+                        parsingRules.put(key, rule);
+                    } catch (OpenEnergyMonitorException e) {
+                        throw new ConfigurationException(key, "invalid parser rule", e);
+                    }
+                }
 
-				dataParser = new OpenEnergyMonitorDataParser(parsingRules);
-			}
-			
-			messageListener = new MessageListener();
-			messageListener.start();
-		}
-	}
+            }
 
-	/**
-	 * The MessageListener runs as a separate thread.
-	 * 
-	 * Thread listening message from Open Energy Monitoring devices and send
-	 * updates to openHAB bus.
-	 * 
-	 */
-	private class MessageListener extends Thread {
+            if (parsingRules != null) {
 
-		private boolean interrupted = false;
+                dataParser = new OpenEnergyMonitorDataParser(parsingRules);
+            }
 
-		MessageListener() {
-		}
+            if (messageListener != null) {
 
-		public void setInterrupted(boolean interrupted) {
-			this.interrupted = interrupted;
-			messageListener.interrupt();
-		}
+                logger.debug("Close previous message listener");
 
-		@Override
-		public void run() {
+                messageListener.setInterrupted(true);
+                try {
+                    messageListener.join();
+                } catch (InterruptedException e) {
+                    logger.info("Previous message listener closing interrupted", e);
+                }
+            }
 
-			logger.debug("Open Energy Monitor message listener started");
+            messageListener = new MessageListener();
+            messageListener.start();
+        }
+    }
 
-			OpenEnergyMonitorConnector connector;
+    /**
+     * The MessageListener runs as a separate thread.
+     *
+     * Thread listening message from Open Energy Monitoring devices and send
+     * updates to openHAB bus.
+     *
+     */
+    private class MessageListener extends Thread {
 
-			if (simulate == true)
-				connector = new OpenEnergyMonitorSimulator();
-			else if (serialPort != null)
-				connector = new OpenEnergyMonitorSerialConnector(serialPort);
-			else
-				connector = new OpenEnergyMonitorUDPConnector(udpPort);
+        private boolean interrupted = false;
 
-			try {
-				connector.connect();
-			} catch (OpenEnergyMonitorException e) {
-				logger.error(
-						"Error occured when connecting to Open Energy Monitor device",
-						e);
-			}
+        MessageListener() {
+        }
 
-			// as long as no interrupt is requested, continue running
-			while (!interrupted) {
+        public void setInterrupted(boolean interrupted) {
+            this.interrupted = interrupted;
+            messageListener.interrupt();
+        }
 
-				try {
-					// Wait a packet (blocking)
-					byte[] data = connector.receiveDatagram();
+        @Override
+        public void run() {
 
-					logger.trace("Received data (len={}): {}", data.length,
-							DatatypeConverter.printHexBinary(data));
+            logger.debug("Open Energy Monitor message listener started");
 
-					HashMap<String, Number> vals = dataParser.parseData(data);
+            OpenEnergyMonitorConnector connector;
 
-					for (OpenEnergyMonitorBindingProvider provider : providers) {
-						for (String itemName : provider.getItemNames()) {
+            if (simulate == true) {
+                connector = new OpenEnergyMonitorSimulator();
+            } else if (serialPort != null) {
+                connector = new OpenEnergyMonitorSerialConnector(serialPort);
+            } else {
+                connector = new OpenEnergyMonitorUDPConnector(udpPort);
+            }
 
-							for (Entry<String, Number> entry : vals.entrySet()) {
-								String key = entry.getKey();
-								Number value = entry.getValue();
+            try {
+                connector.connect();
+            } catch (OpenEnergyMonitorException e) {
+                logger.error("Error occured when connecting to Open Energy Monitor device", e);
 
-								if (key != null && value != null) {
+                logger.warn("Closing Open Energy Monitor message listener");
 
-									boolean found = false;
+                // exit
+                interrupted = true;
+            }
 
-									org.openhab.core.types.State state = null;
+            // as long as no interrupt is requested, continue running
+            while (!interrupted) {
 
-									String variable = provider.getVariable(itemName);
+                try {
+                    // Wait a packet (blocking)
+                    byte[] data = connector.receiveDatagram();
 
-									if (variable.equals(key)) {
-										state = new DecimalType(value.doubleValue());
-										found = true;
+                    logger.trace("Received data (len={}): {}", data.length, DatatypeConverter.printHexBinary(data));
 
-									} else if (variable.contains(key) && variable.matches(".*[+-/*^%].*")) {
-										logger.debug("Eval key={}, variable={}", key, variable);
+                    HashMap<String, Number> vals = dataParser.parseData(data);
 
-										String tmp = replaceVariables(vals, variable);
-										
-										try {
-											double result = new DoubleEvaluator().evaluate(tmp);
-											logger.debug("Eval '{}={}={}'", variable, tmp, result);
-											state = new DecimalType(result);
-											found = true;
+                    for (OpenEnergyMonitorBindingProvider provider : providers) {
+                        for (String itemName : provider.getItemNames()) {
 
-										} catch (Exception e) {
-											logger.error(
-													"Error occured during data evaluation",
-													e);
-										}
-									}
+                            for (Entry<String, Number> entry : vals.entrySet()) {
+                                String key = entry.getKey();
+                                Number value = entry.getValue();
 
-									if (found) {
+                                if (key != null && value != null) {
 
-										state = transformData(
-												provider.getTransformationType(itemName),
-												provider.getTransformationFunction(itemName),
-												state);
+                                    boolean found = false;
 
-										if (state != null) {
-											eventPublisher.postUpdate(itemName, state);
-											break;
-										}
+                                    org.openhab.core.types.State state = null;
 
-									}
+                                    String variable = provider.getVariable(itemName);
 
-								}
-							}
-						}
+                                    if (variable.equals(key)) {
+                                        state = new DecimalType(value.doubleValue());
+                                        found = true;
 
-					}
+                                    } else if (variable.contains(key) && variable.matches(".*[+-/*^%].*")) {
+                                        logger.debug("Eval key={}, variable={}", key, variable);
 
-				} catch (OpenEnergyMonitorException e) {
+                                        String tmp = replaceVariables(vals, variable);
 
-					logger.error(
-							"Error occured when received data from Open Energy Monitor device",
-							e);
-				}
-			}
+                                        try {
+                                            double result = new DoubleEvaluator().evaluate(tmp);
+                                            logger.debug("Eval '{}={}={}'", variable, tmp, result);
+                                            state = new DecimalType(result);
+                                            found = true;
 
-			try {
-				connector.disconnect();
-			} catch (OpenEnergyMonitorException e) {
-				logger.error(
-						"Error occured when disconnecting form Open Energy Monitor device",
-						e);
-			}
+                                        } catch (Exception e) {
+                                            logger.error("Error occured during data evaluation", e);
+                                        }
+                                    }
 
-		}
+                                    if (found) {
 
-	}
+                                        state = transformData(provider.getTransformationType(itemName),
+                                                provider.getTransformationFunction(itemName), state);
 
-	private String replaceVariables(HashMap<String, Number> vals,
-			String variable) {
-		for (Entry<String, Number> entry : vals.entrySet()) {
-			String key = entry.getKey();
-			Object value = entry.getValue();
+                                        if (state != null) {
+                                            eventPublisher.postUpdate(itemName, state);
+                                            break;
+                                        }
 
-			variable = variable.replace(key, String.valueOf(value));
+                                    }
 
-		}
+                                }
+                            }
+                        }
 
-		return variable;
-	}
+                    }
 
-	/**
-	 * Transform received data by Transformation service.
-	 * 
-	 */
-	protected org.openhab.core.types.State transformData(
-			String transformationType, String transformationFunction,
-			org.openhab.core.types.State data) {
-		
-		if (transformationType != null && transformationFunction != null) {
-			String transformedResponse = null;
+                } catch (OpenEnergyMonitorException e) {
 
-			try {
-				TransformationService transformationService = TransformationHelper
-						.getTransformationService(
-								OpenEnergyMonitorActivator.getContext(),
-								transformationType);
-				if (transformationService != null) {
-					transformedResponse = transformationService.transform(
-							transformationFunction, String.valueOf(data));
-				} else {
-					logger.warn(
-							"couldn't transform response because transformationService of type '{}' is unavailable",
-							transformationType);
-				}
-			} catch (TransformationException te) {
-				logger.error(
-						"transformation throws exception [transformation type="
-								+ transformationType
-								+ ", transformation function="
-								+ transformationFunction + ", response=" + data
-								+ "]", te);
-			}
+                    logger.error("Error occured when received data from Open Energy Monitor device", e);
+                }
+            }
 
-			logger.debug("transformed response is '{}'", transformedResponse);
+            try {
+                connector.disconnect();
+            } catch (OpenEnergyMonitorException e) {
+                logger.error("Error occured when disconnecting form Open Energy Monitor device", e);
+            }
 
-			if (transformedResponse != null) {
-				return new DecimalType(transformedResponse);
-			}
-		}
+        }
 
-		return data;
-	}
+    }
+
+    private String replaceVariables(HashMap<String, Number> vals, String variable) {
+        for (Entry<String, Number> entry : vals.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            variable = variable.replace(key, String.valueOf(value));
+
+        }
+
+        return variable;
+    }
+
+    /**
+     * Transform received data by Transformation service.
+     *
+     */
+    protected org.openhab.core.types.State transformData(String transformationType, String transformationFunction,
+            org.openhab.core.types.State data) {
+
+        if (transformationType != null && transformationFunction != null) {
+            String transformedResponse = null;
+
+            try {
+                TransformationService transformationService = TransformationHelper
+                        .getTransformationService(OpenEnergyMonitorActivator.getContext(), transformationType);
+                if (transformationService != null) {
+                    transformedResponse = transformationService.transform(transformationFunction, String.valueOf(data));
+                } else {
+                    logger.warn("couldn't transform response because transformationService of type '{}' is unavailable",
+                            transformationType);
+                }
+            } catch (TransformationException te) {
+                logger.error(
+                        "transformation throws exception [transformation type=" + transformationType
+                                + ", transformation function=" + transformationFunction + ", response=" + data + "]",
+                        te);
+            }
+
+            logger.debug("transformed response is '{}'", transformedResponse);
+
+            if (transformedResponse != null) {
+                return new DecimalType(transformedResponse);
+            }
+        }
+
+        return data;
+    }
 }
